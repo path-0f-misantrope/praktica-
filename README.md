@@ -5,3 +5,5 @@
 DATABASE_URL=postgres://username:password@localhost:port/DBname
 PORT=8080
 4)и тут я понял что если хоть одна колонка будет отличаться то ничего не сработает.а как ее передать и скинуть я невкурсе. ВСЕ ПАКА!!!!!
+5) выполнить schema.sql
+6) УРА ПАБЕДА ZOV ZOV ZOV
