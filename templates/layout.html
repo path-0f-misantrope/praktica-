@@ -216,10 +216,13 @@
         </aside>
 
         <main>
-            {{block "content" .}}
-            <p>Контент не загружен</p>
+            {{if eq .Page "products_new"}}
+                {{template "content_create" .}}
+            {{else}}
+                {{template "content" .}}
             {{end}}
         </main>
+
     </div>
 
     <footer>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -161,6 +162,32 @@ func CreateProduct(ctx context.Context, pool *pgxpool.Pool, input CreateProductI
 	}
 
 	return productID, nil
+}
+
+func GetAllWorkshops(ctx context.Context, pool *pgxpool.Pool) ([]Workshop, error) {
+	query := `SELECT id, name FROM workshops ORDER BY name`
+
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var workshops []Workshop
+	for rows.Next() {
+		var w Workshop
+		err := rows.Scan(&w.ID, &w.Name)
+		if err != nil {
+			return nil, err
+		}
+		workshops = append(workshops, w)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return workshops, nil
 }
 
 // CreateProductWithWorkshops создаёт продукт И связи с цехами в одной транзакции
@@ -362,6 +389,7 @@ func (s *Server) DeleteById(c *gin.Context) {
 	err = DeleteById(c.Request.Context(), s.pool, product_id)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "чет в бдшке сломалось при удалении"})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "удалено успешно"})
 
@@ -388,7 +416,7 @@ func main() {
 
 	// Настройка роутера
 	r := gin.Default()
-
+	r.LoadHTMLGlob("templates/*")
 	// Роуты API
 	api := r.Group("/api")
 	{
@@ -396,12 +424,186 @@ func main() {
 		api.GET("/products/:id", server.GetProductByIDHandler)
 		api.POST("/products", server.CreateProductHandler)
 		api.POST("/products/with-workshops", server.CreateProductWithWorkshopsHandler)
-		api.DELETE("/products", server.DeleteById)
+		api.DELETE("/products/:id", server.DeleteById)
+
 	}
+	r.GET("/", server.ProductsListHandler)
+	r.GET("/products/new", server.ProductsNewHandler)
+	r.POST("/products/create", server.ProductsCreateHandler)
+	r.POST("/products/:id/delete", server.ProductsDeleteHandler)
 
 	// Запуск сервера
 	log.Println("Сервер запущен на :8080")
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func (s *Server) ProductsListHandler(c *gin.Context) {
+	products, err := GetAllProducts(c.Request.Context(), s.pool)
+	if err != nil {
+		log.Printf("Ошибка получения продуктов: %v", err)
+		c.HTML(http.StatusInternalServerError, "layout.html", gin.H{
+			"Title": "Ошибка",
+			"Page":  "products",
+		})
+		return
+	}
+
+	c.HTML(http.StatusOK, "layout.html", gin.H{
+		"Title":    "Список продуктов",
+		"Page":     "products",
+		"Products": products,
+		"Message":  c.Query("message"), // для показа сообщений после создания/удаления
+	})
+}
+
+// GET /products/new - форма создания
+func (s *Server) ProductsNewHandler(c *gin.Context) {
+	materials, _ := GetAllMaterials(c.Request.Context(), s.pool)
+	types, _ := GetAllProductTypes(c.Request.Context(), s.pool)
+	workshops, _ := GetAllWorkshops(c.Request.Context(), s.pool)
+
+	templateData := gin.H{
+		"Title":     "Создать продукт",
+		"Page":      "products_new",
+		"Materials": materials,
+		"Types":     types,
+		"Workshops": workshops,
+	}
+
+	c.HTML(http.StatusOK, "layout.html", templateData)
+}
+
+// POST /products/create - создание продукта
+func (s *Server) ProductsCreateHandler(c *gin.Context) {
+	// Получаем данные из формы
+	productName := c.PostForm("product_name")
+	materialID, _ := strconv.Atoi(c.PostForm("material_id"))
+	typeID, _ := strconv.Atoi(c.PostForm("type_id"))
+	minPrice, _ := strconv.ParseFloat(c.PostForm("min_price"), 64)
+	article := c.PostForm("article")
+
+	// Собираем цеха
+	var workshops []WorkshopInput
+	for key := range c.Request.PostForm {
+		if len(key) > 12 && key[:12] == "workshop_id_" {
+			suffix := key[12:]
+			workshopID, _ := strconv.Atoi(c.PostForm("workshop_id_" + suffix))
+			productionTime, _ := strconv.ParseFloat(c.PostForm("production_time_"+suffix), 64)
+
+			if workshopID > 0 && productionTime > 0 {
+				workshops = append(workshops, WorkshopInput{
+					WorkshopID:     workshopID,
+					ProductionTime: productionTime,
+				})
+			}
+		}
+	}
+
+	// Создаём продукт
+	input := CreateProductWithWorkshopsInput{
+		ProductName: productName,
+		MaterialID:  materialID,
+		TypeID:      typeID,
+		MinPrice:    minPrice,
+		Article:     article,
+		Workshops:   workshops,
+	}
+
+	_, err := CreateProductWithWorkshops(c.Request.Context(), s.pool, input)
+	if err != nil {
+		log.Printf("Ошибка создания продукта: %v", err)
+
+		// Показываем форму с ошибкой
+		materials, _ := GetAllMaterials(c.Request.Context(), s.pool)
+		types, _ := GetAllProductTypes(c.Request.Context(), s.pool)
+		workshopsData, _ := GetAllWorkshops(c.Request.Context(), s.pool)
+
+		c.HTML(http.StatusBadRequest, "layout.html", gin.H{
+			"Title":     "Создать продукт",
+			"Page":      "products_new",
+			"Materials": materials,
+			"Types":     types,
+			"Workshops": workshopsData,
+			"Error":     "Не удалось создать продукт: " + err.Error(),
+		})
+		return
+	}
+
+	// Редирект на список с сообщением об успехе
+	c.Redirect(http.StatusSeeOther, "/?message=Продукт успешно создан")
+}
+
+// POST /products/:id/delete - удаление продукта
+func (s *Server) ProductsDeleteHandler(c *gin.Context) {
+	id := c.Param("id")
+	productID, err := strconv.Atoi(id)
+	if err != nil {
+		c.Redirect(http.StatusSeeOther, "/")
+		return
+	}
+
+	err = DeleteById(c.Request.Context(), s.pool, productID)
+	if err != nil {
+		log.Printf("Ошибка удаления продукта: %v", err)
+		c.Redirect(http.StatusSeeOther, "/?error=Не удалось удалить продукт")
+		return
+	}
+
+	c.Redirect(http.StatusSeeOther, "/?message=Продукт успешно удалён")
+}
+
+// Вспомогательные функции для получения справочников
+type Material struct {
+	ID           int    `json:"id"`
+	MaterialName string `json:"material_name"`
+}
+
+type ProductType struct {
+	ID       int    `json:"id"`
+	TypeName string `json:"type_name"`
+}
+
+type Workshop struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+func GetAllMaterials(ctx context.Context, pool *pgxpool.Pool) ([]Material, error) {
+	query := `SELECT id, material_name FROM materials ORDER BY material_name`
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var materials []Material
+	for rows.Next() {
+		var m Material
+		if err := rows.Scan(&m.ID, &m.MaterialName); err != nil {
+			return nil, err
+		}
+		materials = append(materials, m)
+	}
+	return materials, nil
+}
+
+func GetAllProductTypes(ctx context.Context, pool *pgxpool.Pool) ([]ProductType, error) {
+	query := `SELECT id, type_name FROM products_types ORDER BY type_name`
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var types []ProductType
+	for rows.Next() {
+		var t ProductType
+		if err := rows.Scan(&t.ID, &t.TypeName); err != nil {
+			return nil, err
+		}
+		types = append(types, t)
+	}
+	return types, nil
 }

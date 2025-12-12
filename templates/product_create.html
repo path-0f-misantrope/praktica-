@@ -1,0 +1,103 @@
+{{define "content_create"}}
+
+<div class="card">
+    <h2>➕ Создать новый продукт</h2>
+
+    {{if .Error}}
+    <div class="alert alert-error">{{.Error}}</div>
+    {{end}}
+
+    <form action="/products/create" method="POST">
+        <div class="form-group">
+            <label for="product_name">Название продукта *</label>
+            <input type="text" id="product_name" name="product_name" required>
+        </div>
+
+        <div class="form-group">
+            <label for="material_id">Материал *</label>
+            <select id="material_id" name="material_id" required>
+                <option value="">Выберите материал...</option>
+                {{range .Materials}}
+                <option value="{{.ID}}">{{.MaterialName}}</option>
+                {{end}}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="type_id">Тип продукции *</label>
+            <select id="type_id" name="type_id" required>
+                <option value="">Выберите тип...</option>
+                {{range .Types}}
+                <option value="{{.ID}}">{{.TypeName}}</option>
+                {{end}}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="min_price">Минимальная цена (₽)</label>
+            <input type="number" id="min_price" name="min_price" step="0.01" placeholder="0.00">
+        </div>
+
+        <div class="form-group">
+            <label for="article">Артикул</label>
+            <input type="text" id="article" name="article" placeholder="ART-001">
+        </div>
+
+        <div class="form-group">
+            <label>Цеха производства</label>
+            <div id="workshops-container"></div>
+
+            <button type="button" class="btn btn-success" onclick="addWorkshop()">
+                ➕ Добавить цех
+            </button>
+        </div>
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">💾 Создать продукт</button>
+            <a href="/" class="btn">❌ Отмена</a>
+        </div>
+    </form>
+</div>
+
+<script>
+    let workshopCount = 0;
+
+    function addWorkshop() {
+        workshopCount++;
+
+        const container = document.getElementById("workshops-container");
+        const wrapper = document.createElement("div");
+        wrapper.className = "form-group";
+        wrapper.style.display = "flex";
+        wrapper.style.gap = "10px";
+        wrapper.style.alignItems = "center";
+
+        // Формируем HTML через обычные строки, без JS-шаблонов
+        wrapper.innerHTML = `
+            <select name="workshop_id_${workshopCount}" style="flex:2">
+                <option value="">Выберите цех...</option>
+                ${workshopsOptionsHTML()}
+            </select>
+
+            <input type="number" name="production_time_${workshopCount}"
+                   step="0.1" placeholder="Время (часы)" style="flex:1">
+
+            <button type="button" class="btn btn-danger">✕</button>
+        `;
+
+        wrapper.querySelector(".btn-danger").onclick = () => wrapper.remove();
+
+        container.appendChild(wrapper);
+    }
+
+    // Передаём Go-шаблонные данные в JS как строку
+    function workshopsOptionsHTML() {
+        return `
+            {{range .Workshops}}
+            <option value="{{.ID}}">{{.Name}}</option>
+            {{end}}
+        `;
+    }
+</script>
+
+{{end}}
