@@ -1,0 +1,129 @@
+{{define "content"}}
+<style>
+    .products-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+        gap: 20px;
+        margin-top: 20px;
+    }
+
+    .product-card {
+        border: 2px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 20px;
+        background: white;
+        transition: all 0.3s;
+    }
+
+    .product-card:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        border-color: #667eea;
+    }
+
+    .product-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 15px;
+        border-bottom: 2px solid #f3f4f6;
+        padding-bottom: 15px;
+    }
+
+    .product-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #1f2937;
+        margin-bottom: 5px;
+    }
+
+    .product-time {
+        font-size: 16px;
+        font-weight: 500;
+        color: #667eea;
+        white-space: nowrap;
+    }
+
+    .product-info {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .product-info-item {
+        display: flex;
+        color: #6b7280;
+        font-size: 14px;
+        line-height: 1.6;
+    }
+
+    .product-info-label {
+        min-width: 0;
+        word-wrap: break-word;
+    }
+
+    .product-actions {
+        margin-top: 15px;
+        padding-top: 15px;
+        border-top: 1px solid #f3f4f6;
+        display: flex;
+        gap: 10px;
+    }
+
+    .btn-small {
+        padding: 8px 16px;
+        font-size: 13px;
+    }
+</style>
+
+<div class="card">
+    <h2>📦 Список продуктов</h2>
+    
+    {{if .Message}}
+    <div class="alert alert-success">{{.Message}}</div>
+    {{end}}
+
+    {{if .Error}}
+    <div class="alert alert-error">{{.Error}}</div>
+    {{end}}
+
+    <a href="/products/new" class="btn btn-primary">➕ Создать новый продукт</a>
+
+    {{if .Products}}
+    <div class="products-grid">
+        {{range .Products}}
+        <div class="product-card">
+            <div class="product-header">
+                <div>
+                    <div class="product-title">{{.TypeName}} | {{.ProductName}}</div>
+                </div>
+                <div class="product-time">Время изготовления<br>{{printf "%.1f" .TotalProductionTime}} ч</div>
+            </div>
+            
+            <div class="product-info">
+                <div class="product-info-item">
+                    <span class="product-info-label">Артикул: {{if .Article}}{{.Article}}{{else}}-{{end}}</span>
+                </div>
+                <div class="product-info-item">
+                    <span class="product-info-label">Минимальная стоимость для партнера: {{printf "%.2f" .MinPrice}} ₽</span>
+                </div>
+                <div class="product-info-item">
+                    <span class="product-info-label">Основной материал: {{.MaterialName}}</span>
+                </div>
+            </div>
+
+            <div class="product-actions">
+                <form action="/products/{{.ID}}/delete" method="POST" style="display:inline" 
+                      onsubmit="return confirmDelete(event, '{{.ProductName}}')">
+                    <button type="submit" class="btn btn-danger btn-small">🗑️ Удалить</button>
+                </form>
+            </div>
+        </div>
+        {{end}}
+    </div>
+    {{else}}
+    <p style="text-align: center; padding: 40px; color: #6b7280;">
+        Нет продуктов. <a href="/products/new">Создайте первый продукт</a>
+    </p>
+    {{end}}
+</div>
+{{end}}
