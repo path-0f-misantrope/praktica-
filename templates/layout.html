@@ -209,13 +209,15 @@
             <nav>
                 <a href="/" class="{{if eq .Page "products"}}active{{end}}">📦 Продукты</a>
                 <a href="/products/new" class="{{if eq .Page "products_new"}}active{{end}}">➕ Создать продукт</a>
-
+                <a href="/calculator" class="{{if eq .Page "calculator"}}active{{end}}">🧮 Калькулятор сырья</a>
             </nav>
         </aside>
 
         <main>
             {{if eq .Page "products_new"}}
                 {{template "content_create" .}}
+            {{else if eq .Page "calculator"}}
+                {{template "content_calculator" .}}
             {{else}}
                 {{template "content" .}}
             {{end}}

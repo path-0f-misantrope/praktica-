@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
 )
 
 // ============ МОДЕЛИ ============
@@ -253,6 +255,85 @@ func DeleteById(ctx context.Context, pool *pgxpool.Pool, product_id int) error {
 	return nil
 }
 
+// CalculateMaterialQuantity рассчитывает количество сырья для производства продукции
+// Параметры:
+//   - productTypeID: идентификатор типа продукции
+//   - materialTypeID: идентификатор типа материала
+//   - productQuantity: количество продукции (целое число)
+//   - param1, param2: параметры продукции (вещественные, положительные числа)
+//
+// Возвращает: количество сырья с учетом потерь (целое число)
+func CalculateMaterialQuantity(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	productTypeID int,
+	materialTypeID int,
+	productQuantity int,
+	param1, param2 float64,
+) (int, error) {
+	// Валидация входных параметров
+	if productQuantity <= 0 {
+		return 0, fmt.Errorf("количество продукции должно быть положительным")
+	}
+	if param1 <= 0 || param2 <= 0 {
+		return 0, fmt.Errorf("параметры продукции должны быть положительными")
+	}
+
+	// Получаем коэффициент типа продукции (type_ratio из products_types)
+	// Используем указатель для обработки NULL значений
+	var productTypeCoefficientPtr *float64
+	query1 := `SELECT type_ratio FROM products_types WHERE id = $1`
+	err := pool.QueryRow(ctx, query1, productTypeID).Scan(&productTypeCoefficientPtr)
+	if err == pgx.ErrNoRows {
+		return 0, fmt.Errorf("тип продукции с id %d не найден", productTypeID)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("ошибка получения коэффициента типа продукции: %w", err)
+	}
+
+	// Если type_ratio NULL, возвращаем ошибку (коэффициент обязателен для расчета)
+	if productTypeCoefficientPtr == nil {
+		return 0, fmt.Errorf("коэффициент типа продукции (type_ratio) не установлен для типа с id %d", productTypeID)
+	}
+	productTypeCoefficient := *productTypeCoefficientPtr
+
+	// Получаем процент потерь материала (wasting_percentage из materials)
+	// Используем указатель для обработки NULL значений
+	var lossPercentagePtr *float64
+	query2 := `SELECT wasting_percentage FROM materials WHERE id = $1`
+	err = pool.QueryRow(ctx, query2, materialTypeID).Scan(&lossPercentagePtr)
+	if err == pgx.ErrNoRows {
+		return 0, fmt.Errorf("материал с id %d не найден", materialTypeID)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("ошибка получения процента потерь материала: %w", err)
+	}
+
+	// Если wasting_percentage NULL, используем 0
+	var lossPercentage float64
+	if lossPercentagePtr != nil {
+		lossPercentage = *lossPercentagePtr
+	}
+
+	// Расчет количества сырья на одну единицу продукции
+	materialPerUnit := param1 * param2 * productTypeCoefficient
+
+	// Расчет количества сырья на все единицы продукции
+	totalMaterial := materialPerUnit * float64(productQuantity)
+
+	// Учет потерь: увеличиваем количество с учетом процента потерь
+	// Формула: количество_с_потерями = количество * (1 + процент_потерь / 100)
+	materialWithLosses := totalMaterial * (1.0 + lossPercentage/100.0)
+
+	// Округляем до целого числа вверх (ceil)
+	materialQuantity := int(materialWithLosses)
+	if float64(materialQuantity) < materialWithLosses {
+		materialQuantity++
+	}
+
+	return materialQuantity, nil
+}
+
 // ============ СЛОЙ HTTP (handlers) ============
 
 type Server struct {
@@ -395,12 +476,79 @@ func (s *Server) DeleteById(c *gin.Context) {
 
 }
 
+// CalculateMaterialRequest - запрос на расчет количества сырья
+type CalculateMaterialRequest struct {
+	ProductTypeID  int     `json:"product_type_id" binding:"required"`
+	MaterialTypeID int     `json:"material_type_id" binding:"required"`
+	ProductQuantity int    `json:"product_quantity" binding:"required,gt=0"`
+	Param1          float64 `json:"param1" binding:"required,gt=0"`
+	Param2          float64 `json:"param2" binding:"required,gt=0"`
+}
+
+// POST /api/calculate-material - расчет количества сырья
+func (s *Server) CalculateMaterialHandler(c *gin.Context) {
+	var req CalculateMaterialRequest
+
+	// Валидация JSON
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Неверные данные: " + err.Error(),
+		})
+		return
+	}
+
+	// Выполняем расчет
+	materialQuantity, err := CalculateMaterialQuantity(
+		c.Request.Context(),
+		s.pool,
+		req.ProductTypeID,
+		req.MaterialTypeID,
+		req.ProductQuantity,
+		req.Param1,
+		req.Param2,
+	)
+
+	if err != nil {
+		log.Printf("Ошибка расчета количества сырья: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"material_quantity": materialQuantity,
+		"product_type_id":   req.ProductTypeID,
+		"material_type_id":  req.MaterialTypeID,
+		"product_quantity":  req.ProductQuantity,
+		"param1":            req.Param1,
+		"param2":            req.Param2,
+	})
+}
+
 // ============ MAIN ============
 func main() {
+	// Загрузка .env файла
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Файл .env не найден, используются переменные окружения")
+	}
+
 	ctx := context.Background()
 
+	// Получаем переменные из окружения
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL не установлен")
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // значение по умолчанию
+	}
+
 	// Создание пула соединений
-	pool, err := pgxpool.New(ctx, "postgres://postgres:zxcqwe123@localhost:5432/practice")
+	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		log.Fatalf("Не удалось создать пул соединений: %v", err)
 	}
@@ -425,16 +573,17 @@ func main() {
 		api.POST("/products", server.CreateProductHandler)
 		api.POST("/products/with-workshops", server.CreateProductWithWorkshopsHandler)
 		api.DELETE("/products/:id", server.DeleteById)
-
+		api.POST("/calculate-material", server.CalculateMaterialHandler)
 	}
 	r.GET("/", server.ProductsListHandler)
 	r.GET("/products/new", server.ProductsNewHandler)
 	r.POST("/products/create", server.ProductsCreateHandler)
 	r.POST("/products/:id/delete", server.ProductsDeleteHandler)
+	r.GET("/calculator", server.CalculatorHandler)
 
 	// Запуск сервера
-	log.Println("Сервер запущен на :8080")
-	if err := r.Run(":8080"); err != nil {
+
+	if err := r.Run(":" + port); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -606,4 +755,17 @@ func GetAllProductTypes(ctx context.Context, pool *pgxpool.Pool) ([]ProductType,
 		types = append(types, t)
 	}
 	return types, nil
+}
+
+// GET /calculator - форма калькулятора
+func (s *Server) CalculatorHandler(c *gin.Context) {
+	materials, _ := GetAllMaterials(c.Request.Context(), s.pool)
+	types, _ := GetAllProductTypes(c.Request.Context(), s.pool)
+
+	c.HTML(http.StatusOK, "layout.html", gin.H{
+		"Title":     "Калькулятор сырья",
+		"Page":      "calculator",
+		"Materials": materials,
+		"Types":     types,
+	})
 }
